@@ -1,0 +1,22 @@
+{
+  "mode": "cut",
+  "constraints": {
+    "max_calories": 650,
+    "min_protein": 30,
+    "max_price": 45,
+    "must_categories": ["堡"],
+    "max_items": 3
+  },
+  "items": [
+    {"code": "A1", "name": "板烧鸡腿堡", "category": "堡", "price": 21.0, "energy": 404, "protein": 27, "fat": 17, "carb": 37, "sodium": 980},
+    {"code": "A2", "name": "吉士蛋麦满分", "category": "堡", "price": 12.5, "energy": 300, "protein": 17, "fat": 13, "carb": 31, "sodium": 720},
+    {"code": "A3", "name": "麦香鱼", "category": "堡", "price": 15.0, "energy": 340, "protein": 16, "fat": 14, "carb": 38, "sodium": 640},
+    {"code": "B1", "name": "麦乐鸡（5块）", "category": "小食", "price": 12.0, "energy": 220, "protein": 13, "fat": 14, "carb": 10, "sodium": 480},
+    {"code": "B2", "name": "玉米杯", "category": "小食", "price": 8.0, "energy": 70, "protein": 2, "fat": 1, "carb": 15, "sodium": 5},
+    {"code": "B3", "name": "大薯条", "category": "小食", "price": 13.0, "energy": 430, "protein": 5, "fat": 21, "carb": 56, "sodium": 330},
+    {"code": "C1", "name": "零度可乐（中）", "category": "饮料", "price": 9.0, "energy": 0, "protein": 0, "fat": 0, "carb": 0, "sodium": 20},
+    {"code": "C2", "name": "鲜煮咖啡（中）", "category": "饮料", "price": 10.0, "energy": 15, "protein": 1, "fat": 0, "carb": 2, "sodium": 10},
+    {"code": "C3", "name": "纯牛奶", "category": "饮料", "price": 8.5, "energy": 130, "protein": 8, "fat": 7, "carb": 12, "sodium": 120},
+    {"code": "D1", "name": "蔬菜沙拉", "category": "配餐", "price": 11.0, "energy": 35, "protein": 2, "fat": 0, "carb": 6, "sodium": 180}
+  ]
+}

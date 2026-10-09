@@ -1,0 +1,161 @@
+# 🍟 麦门卡路里精算师（McDonald's Calorie Architect）
+
+> 输入「热量预算 + 想吃什么」，AI 用**麦当劳官方 MCP 的真实营养数据**，算出在热量、蛋白质、预算三重约束下的最优配餐，
+> 再告诉你这顿吃完**要跑几公里**。
+
+基于 [麦当劳中国官方 MCP 服务](https://github.com/M-China/mcd-mcp-server) 开发的参赛 Skill —— **2026 麦当劳程序员创意开发大赛**。
+
+---
+
+## 为什么要有这个
+
+「吃麦当劳」和「控卡健身」一直是两件打架的事。已有的麦当劳 Skill 大多在解决**怎么点最省钱**，
+但另一半人真正的问题是：**怎么点才不胖**。
+
+官方 MCP 里本来就有一个 `list-nutrition-foods`（餐品营养信息列表），官方描述里写着
+「需要帮助用户搭配指定热量套餐时使用此工具」——这个能力一直没人用起来。本项目就是把它用透。
+
+**和省钱类 Skill 的区别**：第一约束是热量和蛋白质，价格是第二约束。两者可以同时约束。
+
+---
+
+## ✨ 它能做什么
+
+| 模式 | 你说 | 它做 |
+|---|---|---|
+| 🧮 卡路里配餐 | "午餐 600 大卡怎么吃" "今天练腿，蛋白要 40g" | 拉真实营养数据 → 约束求解 → Top3 方案（热量/蛋白/脂肪/碳水/钠/价格全列出） |
+| 🔥 运动换算 | "这顿要跑几公里" | 翻译成跑步/快走/骑车/游泳/跳绳的分钟数、公里数、步数 |
+| 💰 双目标 | "600 大卡以内，最好别超 35 块" | 热量与预算同时约束 |
+| 🛒 确认下单 | "就按方案 2 下单" | 复核价格 → 明细确认 → **确认后才下单** |
+| ☀️ 每日轻食播报 | "麦麦轻食早报"（可挂定时任务） | 今日活动 + 低卡推荐 + 积分提醒 |
+
+---
+
+## 🚀 快速开始
+
+### 1. 申请麦当劳 MCP Token
+
+前往 [open.mcd.cn/mcp](https://open.mcd.cn/mcp) → 手机号登录 → 右上角「控制台」→「激活」→ 复制 Token。
+
+### 2. 配置 MCP 连接器（以 WorkBuddy 为例）
+
+左侧边栏【专家·技能·连接器】→【连接器】→ 右上角【自定义连接器】→【配置MCP】，填入：
+
+```json
+{
+  "mcpServers": {
+    "mcd-mcp": {
+      "type": "streamablehttp",
+      "url": "https://mcp.mcd.cn",
+      "headers": {
+        "Authorization": "Bearer YOUR_MCP_TOKEN"
+      }
+    }
+  }
+}
+```
+
+> ⚠️ 把 `YOUR_MCP_TOKEN` 换成你的真实 Token，保存并启用。
+> 其他客户端（Cursor / Cherry Studio / Trae / VSCode 等）配置方式相同。
+
+### 3. 安装本 Skill
+
+把本仓库的 `SKILL.md`、`scripts/`、`references/` 复制到你的技能目录：
+
+- **WorkBuddy**：`~/.workbuddy/skills/mcd-calorie-architect/`
+- **其他 Agent**：放入对应 skills 目录即可（SKILL.md 为通用格式，不绑定框架）
+
+### 4. 开聊
+
+```
+你：我 68kg，减脂中，午餐想吃个堡，600 大卡以内，最好别超 40 块
+精算师：🍟 配餐模式：cut（减脂控卡）……
+```
+
+---
+
+## 🧠 它是怎么算的
+
+不是让大模型拍脑袋估热量，而是**真实数据 + 约束求解**：
+
+1. **真实营养数据**：`list-nutrition-foods` 拉官方营养成分（能量/蛋白/脂肪/碳水/钠）
+2. **套餐单独拆**：`query-meal-detail` 独立取套餐营养值，不用单点相加代替
+3. **三重约束求解**：热量上限 + 蛋白下限 + 预算上限，外加必吃品类、件数、钠上限
+4. **剪枝搜索**：单品淘汰 → 候选池裁剪 → 累加剪枝，避免组合爆炸
+5. **营养指纹去重**：营养完全一样时只留最便宜的，不会为了凑件数多卖一瓶零度可乐
+6. **运动换算**：ACSM 代谢当量公式 `kcal/min = MET × 3.5 × 体重kg / 200`，落到公里数和步数
+
+详见 [references/nutrition-strategy.md](references/nutrition-strategy.md)。
+
+---
+
+## ✅ 算法是可验证的
+
+两个脚本都带内置自测，共 10 项断言：
+
+```bash
+python scripts/meal_planner.py --self-test
+python scripts/burn_calc.py --self-test
+```
+
+覆盖：约束是否真的被遵守、无解时是否老实返回空、四种模式排序是否正确、
+脏数据（缺字段/字符串数字/空记录）是否容错、营养指纹去重是否生效、
+运动换算的线性性与除零边界。
+
+样例数据可直接跑，不需要 Token：
+
+```bash
+python scripts/meal_planner.py --mode cut < examples/sample_input.json
+python scripts/burn_calc.py 519 --weight 68
+```
+
+实际输出见 [examples/demo.md](examples/demo.md)。
+
+---
+
+## 📁 仓库结构
+
+```
+├── SKILL.md                      技能主体（四类模式 + 工作流 + 硬性原则）
+├── scripts/
+│   ├── meal_planner.py           配餐组合优化器（剪枝 + 去重 + 自测）
+│   └── burn_calc.py              运动消耗换算器（ACSM MET 公式 + 自测）
+├── references/
+│   ├── tools.md                  麦当劳 MCP 工具速查与实测要点
+│   └── nutrition-strategy.md     配餐策略与免责边界
+├── examples/
+│   ├── sample_input.json         可直接跑的输入样例
+│   └── demo.md                   完整对话示例
+├── README.md                     本文件
+├── MCP_INTEGRATION.md            MCP 接入与调用流程说明
+├── CONTEST_DECLARATION.md        参赛声明（官方文件，内容未改动）
+└── workbuddy.md                  WorkBuddy 联动开发记录
+```
+
+---
+
+## 🎯 目标用户
+
+- 减脂/增肌期又戒不掉麦门的健身人
+- 想知道「这顿要跑几公里」的普通打工人
+- 既要控卡又要看钱包的理性消费者
+- 控钠人群（默认输出钠，不是只报热量）
+
+---
+
+## ⚠️ 声明
+
+- 本项目为麦当劳程序员节创意开发大赛参赛作品，非麦当劳官方产品
+- 输出**不构成医疗或营养建议**；有基础疾病、孕期、未成年等特殊情况请咨询医生或营养师
+- 餐品信息、营养数据、价格及供应状态以麦当劳官方渠道实时结果为准
+- 下单、积分兑换、抽奖等资金/权益操作均需用户显式确认后执行
+- 本仓库不包含任何真实 Token，配置文件仅使用占位符
+
+---
+
+## 🏆 参赛信息
+
+- 赛事：[2026 麦当劳程序员创意开发大赛](https://github.com/M-China/mcd-developer-innovation-challenge)
+- 开发工具：本项目使用 [WorkBuddy](https://www.workbuddy.cn/) 辅助开发
+
+如果这个项目帮你在麦门少长了二两肉，欢迎点个 ⭐ Star 支持一下！
