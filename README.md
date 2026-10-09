@@ -74,6 +74,25 @@
 
 ---
 
+## 📊 真实数据实测（2026-10-10）
+
+已用真实 MCP Token 调通 `list-nutrition-foods`，拿到**官方 160 条**餐品营养数据跑通全链路。
+
+**场景：减脂午餐，600 kcal 以内，蛋白 ≥ 30g，必含堡，最多 3 件**
+
+| 约束 | 最优方案 | 热量 | 蛋白 | 钠 |
+|---|---|---|---|---|
+| 不限钠 | 脆汁鸡×2 + 原味板烧鸡腿麦满分 | 524 kcal | **54 g** | **1996 mg** |
+| 限钠 1500mg | 脆汁鸡 + 原味板烧鸡腿炒双蛋堡 | 545 kcal | 46 g | **1465 mg** |
+
+**这个结果是真实数据才看得见的**：只追求低卡高蛋白，优化器会把钠推到 1996 mg——
+一天推荐摄入量才 2000 mg，一餐就吃掉一整天的量。加上限钠约束后钠降到 1465 mg，
+代价是蛋白从 54 g 掉到 46 g。**热量和钠是两个独立维度，只看热量的"健康配餐"是假的。**
+
+完整记录见 [examples/live-run-2026-10-10.md](examples/live-run-2026-10-10.md)。
+
+---
+
 ## 🧠 它是怎么算的
 
 不是让大模型拍脑袋估热量，而是**真实数据 + 约束求解**：
@@ -91,16 +110,17 @@
 
 ## ✅ 算法是可验证的
 
-两个脚本都带内置自测，共 10 项断言：
+三个脚本都带内置自测，共 **14 项断言**：
 
 ```bash
 python scripts/meal_planner.py --self-test
 python scripts/burn_calc.py --self-test
+python scripts/parse_nutrition.py --self-test
 ```
 
 覆盖：约束是否真的被遵守、无解时是否老实返回空、四种模式排序是否正确、
 脏数据（缺字段/字符串数字/空记录）是否容错、营养指纹去重是否生效、
-运动换算的线性性与除零边界。
+运动换算的线性性与除零边界、MCP 自定义格式的解析与 kJ 兜底换算、品类推断。
 
 样例数据可直接跑，不需要 Token：
 
@@ -119,13 +139,15 @@ python scripts/burn_calc.py 519 --weight 68
 ├── SKILL.md                      技能主体（四类模式 + 工作流 + 硬性原则）
 ├── scripts/
 │   ├── meal_planner.py           配餐组合优化器（剪枝 + 去重 + 自测）
-│   └── burn_calc.py              运动消耗换算器（ACSM MET 公式 + 自测）
+│   ├── burn_calc.py              运动消耗换算器（ACSM MET 公式 + 自测）
+│   └── parse_nutrition.py        MCP 营养数据解析器（自定义格式 → 标准 JSON）
 ├── references/
 │   ├── tools.md                  麦当劳 MCP 工具速查与实测要点
 │   └── nutrition-strategy.md     配餐策略与免责边界
 ├── examples/
 │   ├── sample_input.json         可直接跑的输入样例
-│   └── demo.md                   完整对话示例
+│   ├── demo.md                   完整对话示例
+│   └── live-run-2026-10-10.md    真实 MCP 数据跑通记录（160 条餐品）
 ├── README.md                     本文件
 ├── MCP_INTEGRATION.md            MCP 接入与调用流程说明
 ├── CONTEST_DECLARATION.md        参赛声明（官方文件，内容未改动）

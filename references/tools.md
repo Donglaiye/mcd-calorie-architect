@@ -30,11 +30,18 @@
 `query-party-city`、`query-party-store`、`query-partystore-date`、`query-partystore-session`、
 `party-order-create`
 
-## 实测要点
+## 实测要点（2026-10-10 真实调用验证）
 
+0. **`list-nutrition-foods` 是零参数的**，直接 `tools/call` 即可，实测返回 **160 条**餐品营养记录，
+   字段为 `productName / nutritionDescription / energyKj / energyKcal / protein / fat / carbohydrate / sodium / calcium`，
+   以 `[160]{...}:` 表头 + 数据行的自定义文本格式返回（需要解析，见 `scripts/parse_nutrition.py`）。
+   ⚠️ **该接口不返回价格**，价格要走 `query-nearby-stores` → `query-meals` 另一条链路。
 1. **营养数据以 `list-nutrition-foods` 为准**，不要凭印象估算热量——不同门店、不同批次配方会变。
+   **接口也不返回分类字段**，品类需按餐品名推断（注意「冰美式小杯」不含"咖啡"二字这类坑）。
 2. **套餐要先 `query-meal-detail` 拆开**：套餐的营养值通常不等于单点之和，且可替换项会改变结果。
 3. **热量和价格要分开取**：营养来自 `list-nutrition-foods`，价格与优惠来自 `query-meals` + `calculate-price`，两者靠餐品编码对齐。
-4. **钠经常被忽略**：控卡人群常常同时需要控钠，本 Skill 默认输出钠并支持 `max_sodium` 约束。
+4. **钠必须一起看**：真实数据实测——只约束热量和蛋白时，最优解钠高达 1996 mg（一天推荐 2000 mg）；
+   加上 `max_sodium: 1500` 后钠降到 1465 mg，代价是蛋白从 54 g 掉到 46 g。
+   **热量与钠是独立维度，只看热量的"健康配餐"不成立。**
 5. **先算后买**：任何下单动作前必须过一遍 `calculate-price`，且必须得到用户显式确认。
 6. **拿不到实时数据时降级**：若 MCP 不可用，明确告知用户当前用的是估算值，不要伪装成实时数据。

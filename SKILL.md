@@ -39,7 +39,14 @@ version: 1.0.0
 4. 套餐用 `query-meal-detail` 单独拆开取营养，**不要用单点相加代替**
 5. 需要控制花费时，再取 `query-store-coupons` + `calculate-price`
 
-把结果整理成 `examples/sample_input.json` 的形状，喂给优化器：
+`list-nutrition-foods` 返回的是自定义文本格式（形如 `[160]{字段...}:` 加数据行），
+用解析器转成标准 JSON：
+
+```bash
+python scripts/parse_nutrition.py --input mcp_response.json --output items.json
+```
+
+然后把 `items.json` 的 items 连同约束整理成 `examples/sample_input.json` 的形状，喂给优化器：
 
 ```bash
 python scripts/meal_planner.py --mode cut < input.json
@@ -88,9 +95,11 @@ MCP 不可用（401 Token 失效 / 429 限流 / 网络问题）时：
 ```bash
 python scripts/meal_planner.py --self-test
 python scripts/burn_calc.py --self-test
+python scripts/parse_nutrition.py --self-test
 ```
 
-共 10 项断言，覆盖约束遵守性、无解返回空、模式排序、脏数据容错、营养指纹去重、运动换算线性与边界。
+共 14 项断言，覆盖约束遵守性、无解返回空、模式排序、脏数据容错、营养指纹去重、
+运动换算线性与边界、MCP 格式解析与 kJ 兜底换算、品类推断。
 
 ## 目录
 
@@ -98,11 +107,13 @@ python scripts/burn_calc.py --self-test
 ├── SKILL.md                     本文件
 ├── scripts/
 │   ├── meal_planner.py          配餐组合优化器（带剪枝 + 营养指纹去重 + 自测）
-│   └── burn_calc.py             运动消耗换算器（ACSM MET 公式 + 自测）
+│   ├── burn_calc.py             运动消耗换算器（ACSM MET 公式 + 自测）
+│   └── parse_nutrition.py       MCP 营养数据解析器（自定义格式 → 标准 JSON + 自测）
 ├── references/
 │   ├── tools.md                 麦当劳 MCP 工具速查与实测要点
 │   └── nutrition-strategy.md    配餐策略与免责边界
 └── examples/
     ├── sample_input.json        可直接跑的输入样例
-    └── demo.md                  完整对话示例
+    ├── demo.md                  完整对话示例
+    └── live-run-2026-10-10.md   真实 MCP 数据跑通记录（160 条餐品）
 ```
