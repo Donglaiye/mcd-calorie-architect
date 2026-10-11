@@ -1,0 +1,19 @@
+# 运行时产物
+__pycache__/
+*.py[cod]
+.cache/
+.venv/
+venv/
+
+# 本地数据与临时文件（真实 MCP 响应可能含门店信息，一律不入库）
+*mcp_response*.json
+items.json
+nutrition_raw*.txt
+*.log
+
+# 编辑器与系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -17,6 +17,7 @@ import argparse
 import json
 import re
 import sys
+import unicodedata
 
 # 表头正则：[N]{字段1,字段2,...}:
 HEADER_RE = re.compile(r"\[(\d+)\]\{([^}]*)\}\s*:")
@@ -43,6 +44,26 @@ def guess_category(name: str) -> str:
             if kw in name:
                 return cat
     return "其他"
+
+
+def normalize_name(s: str) -> str:
+    """
+    餐品名归一化——营养表和门店菜单能对齐的前提。
+
+    实测踩到的坑（见 references/tools.md 第 11 条）：
+    营养表 160 条与门店菜单**零同名命中**，差异不只是名字不同，还有
+    全角/半角括号（零度可乐（中） vs 零度可乐(中)）、多余空格、NFKC 未归一等。
+    不归一化就去匹配，价格永远合并不上，双目标模式直接失效。
+    """
+    if not s:
+        return ""
+    s = unicodedata.normalize("NFKC", str(s))
+    for a, b in (("（", "("), ("）", ")"), ("［", "["), ("］", "]"),
+                 ("【", "["), ("】", "]"), ("，", ","), ("．", ".")):
+        s = s.replace(a, b)
+    s = re.sub(r"\s+", "", s)          # 去掉所有空白（含全角空格，NFKC 后为空格）
+    s = s.rstrip("。.")
+    return s.lower()
 
 
 def parse_payload(raw: str) -> list:
@@ -130,13 +151,46 @@ def parse_payload(raw: str) -> list:
 
 
 def merge_prices(items: list, price_map: dict) -> list:
-    """按餐品名（支持部分匹配）合并价格。"""
-    hit = 0
+    """
+    按餐品名合并价格，三级匹配：精确 → 归一化精确 → 归一化包含（取最长匹配）。
+
+    为什么不能只做精确匹配：营养表写「零度可乐（中）」，门店菜单写「零度可乐(中)」，
+    差一个全角括号就命中不了。实测不做归一化时对齐率接近 0。
+    """
+    norm_index = {}
+    for k, v in price_map.items():
+        norm_index.setdefault(normalize_name(k), []).append((k, float(v)))
+
+    exact = norm_hit = fuzzy_hit = 0
     for it in items:
-        if it["name"] in price_map:
-            it["price"] = float(price_map[it["name"]])
-            hit += 1
-    print(f"价格合并：{hit}/{len(items)} 条命中", file=sys.stderr)
+        name = it["name"]
+        if name in price_map:                       # ① 精确
+            it["price"] = float(price_map[name])
+            exact += 1
+            continue
+        nk = normalize_name(name)
+        if nk in norm_index:                        # ② 归一化后精确
+            it["price"] = norm_index[nk][0][1]
+            norm_hit += 1
+            continue
+        # ③ 归一化后包含匹配，取最长的一方，避免「薯条」误命中「大薯条」
+        best_key, best_val = None, None
+        for cand, vals in norm_index.items():
+            if not cand:
+                continue
+            if cand in nk or nk in cand:
+                if best_key is None or len(cand) > len(best_key):
+                    best_key, best_val = cand, vals[0][1]
+        if best_val is not None:
+            it["price"] = best_val
+            fuzzy_hit += 1
+
+    total = len(items)
+    print(
+        f"价格合并：{exact + norm_hit + fuzzy_hit}/{total} 条命中"
+        f"（精确 {exact} / 归一化 {norm_hit} / 包含 {fuzzy_hit}）",
+        file=sys.stderr,
+    )
     return items
 
 
@@ -182,6 +236,22 @@ def self_test() -> int:
     out = parse_payload(dirty)
     assert len(out) == 1 and out[0]["name"] == "正常品", out
     print("  通过：脏行被跳过，正常行保留")
+
+    print("== 自测 5：价格合并必须扛住全角括号 / 空格 / 大小写差异 ==")
+    # 营养表侧（全角括号 + 空格）与门店菜单侧（半角括号）写法不同，这是实测的真实差异
+    nutrition_side = [
+        {"name": "零度可乐 （中）", "category": "饮料", "energy": 0},
+        {"name": "板烧鸡腿堡", "category": "堡", "energy": 404},
+        {"name": "大薯条", "category": "小食", "energy": 430},
+    ]
+    menu_prices = {"零度可乐(中)": 9.0, "板烧鸡腿堡 ": 21.0, "薯条": 13.0}
+    merged = merge_prices([dict(x) for x in nutrition_side], menu_prices)
+    got = {m["name"]: m["price"] for m in merged}
+    assert got["零度可乐 （中）"] == 9.0, f"全角括号未归一化：{got}"
+    assert got["板烧鸡腿堡"] == 21.0, f"多余空格未归一化：{got}"
+    assert got["大薯条"] == 13.0, f"包含匹配失效：{got}"
+    assert normalize_name("零度可乐（中）") == normalize_name("零度可乐(中)"), "归一化函数本身不成立"
+    print(f"  通过：{got}")
 
     print("\n全部自测通过 ✅")
     return 0

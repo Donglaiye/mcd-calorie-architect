@@ -22,7 +22,7 @@
 
 所以差别不在「要不要算热量」，而在**怎么算**：让模型凭印象给一个热量数字是免费的，
 但那个数字不可复算。这里把真实营养数据作为输入，在本地做一道带约束的组合优化——
-结果可复算、可验证，并用 14 项自测兜底。
+结果可复算、可验证，并用 **20 项自测**兜底。
 
 **和其他配餐 Skill 的区别**：第一约束是热量和蛋白质，价格是第二约束，钠始终跟着输出；三者的取舍会被显式算出来，而不是被藏起来。
 
@@ -121,6 +121,14 @@
 4. **剪枝搜索**：单品淘汰 → 候选池裁剪 → 累加剪枝，避免组合爆炸
 5. **营养指纹去重**：营养完全一样时只留最便宜的，不会为了凑件数多卖一瓶零度可乐
 6. **运动换算**：ACSM 代谢当量公式 `kcal/min = MET × 3.5 × 体重kg / 200`，落到公里数和步数
+7. **两套数据源对齐**：营养表与门店菜单零同名命中，靠 NFKC + 全角/半角归一化的三级匹配把热量和价格缝到一起
+
+输出既有人读的版本，也有 `--json` 结构化版本（给其他 Agent 或脚本对接）：
+
+```bash
+python scripts/meal_planner.py --mode cut < examples/sample_input.json --json
+python scripts/burn_calc.py 519 --weight 68 --json
+```
 
 详见 [references/nutrition-strategy.md](references/nutrition-strategy.md)。
 
@@ -128,7 +136,7 @@
 
 ## ✅ 算法是可验证的
 
-三个脚本都带内置自测，共 **14 项断言**：
+三个脚本都带内置自测，共 **20 项断言**（`meal_planner` 9 / `burn_calc` 6 / `parse_nutrition` 5）：
 
 ```bash
 python scripts/meal_planner.py --self-test
@@ -138,7 +146,15 @@ python scripts/parse_nutrition.py --self-test
 
 覆盖：约束是否真的被遵守、无解时是否老实返回空、四种模式排序是否正确、
 脏数据（缺字段/字符串数字/空记录）是否容错、营养指纹去重是否生效、
-运动换算的线性性与除零边界、MCP 自定义格式的解析与 kJ 兜底换算、品类推断。
+运动换算的线性性与除零边界、MCP 自定义格式的解析与 kJ 兜底换算、品类推断，
+以及三条只有接过真实 MCP 数据才会暴露的坑：
+
+- **字段名静默降级**：MCP 给的是 `carbohydrate`/`energyKcal`，内部用 `carb`/`energy`。
+  早期版本不认 `carbohydrate`，直接填 0——「碳水 0 g」的餐品看起来永远合规，且不报任何错。
+- **未知价格冒充最低价**：营养接口不含价格，价格链路断了时 `price=0`，
+  在 cheap 模式会被判成最便宜。`require_price: true` 让优化器宁可少选也不给假答案。
+- **餐品名对不上**：营养表写「零度可乐（中）」，菜单写「零度可乐(中)」，差一个全角括号就命中不了。
+  解析器内置 NFKC + 括号/空格归一化的三级匹配（精确 → 归一化 → 最长包含）。
 
 样例数据可直接跑，不需要 Token：
 
@@ -168,8 +184,11 @@ python scripts/burn_calc.py 519 --weight 68
 │   └── live-run-2026-10-10.md    真实 MCP 数据跑通记录（160 条餐品）
 ├── README.md                     本文件
 ├── MCP_INTEGRATION.md            MCP 接入与调用流程说明
-├── CONTEST_DECLARATION.md        参赛声明（官方文件，内容未改动）
-└── workbuddy.md                  WorkBuddy 联动开发记录
+├── CONTEST_DECLARATION.md        参赛声明（官方文件，内容未改动，与官方字节一致）
+├── workbuddy.md                  WorkBuddy 联动开发记录
+├── mcp-config.example.json       脱敏 MCP 配置示例（仅占位符）
+├── LICENSE                       MIT
+└── .gitignore
 ```
 
 ---

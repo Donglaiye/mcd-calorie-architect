@@ -9,6 +9,7 @@
 """
 
 import argparse
+import json
 import sys
 
 # 活动名: (MET, 速度 km/h, 是否有距离)
@@ -26,6 +27,7 @@ ACTIVITIES = {
 
 STEP_LENGTH_M = 0.75   # 成人平均步幅
 RICE_BOWL_KCAL = 230.0  # 一碗米饭约 230 kcal
+DEFAULT_WEIGHT = 65.0   # 体重非法/未提供时的兜底值
 
 
 def kcal_per_minute(met: float, weight: float) -> float:
@@ -33,7 +35,18 @@ def kcal_per_minute(met: float, weight: float) -> float:
 
 
 def burn(kcal: float, weight: float = 65.0) -> dict:
-    """返回每种活动消耗掉 kcal 需要多久 / 多远 / 多少步。"""
+    """返回每种活动消耗掉 kcal 需要多久 / 多远 / 多少步。
+
+    入参先做防御：负热量（脏数据）与零/负体重（会除零）都不能让脚本崩或给出负数时长。
+    """
+    kcal = max(0.0, float(kcal))
+    # 体重非法（0/负数/没给）回落到默认 65kg，而不是夹到 1kg——后者会算出几千分钟的荒谬值
+    try:
+        weight = float(weight)
+    except (TypeError, ValueError):
+        weight = DEFAULT_WEIGHT
+    if weight <= 0:
+        weight = DEFAULT_WEIGHT
     out = {}
     for name, (met, speed, has_dist) in ACTIVITIES.items():
         per_min = kcal_per_minute(met, weight)
@@ -49,6 +62,8 @@ def burn(kcal: float, weight: float = 65.0) -> dict:
 
 
 def render(kcal: float, weight: float) -> str:
+    kcal = max(0.0, float(kcal))
+    weight = max(1.0, float(weight))
     r = burn(kcal, weight)
     lines = [
         f"🔥 这一顿约 {kcal:.0f} kcal（按体重 {weight:.0f} kg 估算）",
@@ -106,6 +121,16 @@ def self_test() -> int:
     assert 100 <= per_min_steps <= 125, f"步频异常：{per_min_steps:.0f} 步/分钟"
     print(f"  通过：{per_min_steps:.0f} 步/分钟")
 
+    print("== 自测 6：脏入参不能产出负数或异常（负热量 / 零体重）==")
+    neg = burn(-500, 65)
+    assert neg["跑步"]["minutes"] == 0.0, f"负热量应归 0，实际 {neg['跑步']}"
+    zero_w = burn(500, 0)
+    assert zero_w["跑步"]["minutes"] > 0, "零体重不能除零"
+    assert abs(zero_w["跑步"]["minutes"] - burn(500, DEFAULT_WEIGHT)["跑步"]["minutes"]) < 1e-6, \
+        "零体重应回落到默认体重，而不是算出荒谬值"
+    assert all(v["minutes"] >= 0 for v in burn(300, 65).values()), "不允许出现负时长"
+    print(f"  通过：-500kcal→0min；体重 0 已兜底为 {burn(500,0)['跑步']['minutes']:.1f}min")
+
     print("\n全部自测通过 ✅")
     return 0
 
@@ -124,7 +149,7 @@ def main() -> int:
         ap.error("请提供 kcal，或使用 --self-test")
 
     if args.json:
-        print(__import__("json").dumps(burn(args.kcal, args.weight), ensure_ascii=False, indent=2))
+        print(json.dumps(burn(args.kcal, args.weight), ensure_ascii=False, indent=2))
     else:
         print(render(args.kcal, args.weight))
     return 0

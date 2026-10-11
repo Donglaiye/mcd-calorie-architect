@@ -49,10 +49,19 @@ python scripts/parse_nutrition.py --input mcp_response.json --output items.json
 然后把 `items.json` 的 items 连同约束整理成 `examples/sample_input.json` 的形状，喂给优化器：
 
 ```bash
-python scripts/meal_planner.py --mode cut < input.json
+python scripts/meal_planner.py --mode cut < input.json          # 人读
+python scripts/meal_planner.py --mode cut < input.json --json    # 机器读（对接其他 Agent）
 ```
 
 参数说明见 `scripts/meal_planner.py --list-modes`。
+
+两个容易踩的坑，脚本已内置防护：
+
+- **字段名不一致**：MCP 原始字段是 `carbohydrate`/`energyKcal`，本仓库内部用 `carb`/`energy`。
+  优化器按别名表两种写法都吃——早期版本不认 `carbohydrate`，会把它静默填成 0，
+  于是「碳水 0 g」的餐品看起来永远合规。这类不报错的错比崩溃更危险。
+- **价格未知**：营养接口不返回价格，价格链路没打通时 `price=0`。cheap 模式下 0 元会被判成最便宜而永远胜出。
+  此时显式传 `require_price: true`，优化器剔掉无价格商品，宁可少选也不给假答案。
 
 ### 第三步 输出方案
 
@@ -98,8 +107,17 @@ python scripts/burn_calc.py --self-test
 python scripts/parse_nutrition.py --self-test
 ```
 
-共 14 项断言，覆盖约束遵守性、无解返回空、模式排序、脏数据容错、营养指纹去重、
-运动换算线性与边界、MCP 格式解析与 kJ 兜底换算、品类推断。
+共 **20 项断言**，覆盖约束遵守性、无解返回空、模式排序、脏数据容错、营养指纹去重、
+运动换算线性与边界、MCP 格式解析与 kJ 兜底换算、品类推断、
+MCP 原始字段名别名（防止 carbohydrate 之类被静默填 0）、未知价格剔除、件数硬闸、餐品名归一化对齐。
+
+```bash
+python scripts/meal_planner.py --self-test   # 9 项
+python scripts/burn_calc.py --self-test      # 6 项
+python scripts/parse_nutrition.py --self-test # 5 项
+```
+
+改动脚本后**必须**重跑，断言不过不许提交。
 
 ## 目录
 

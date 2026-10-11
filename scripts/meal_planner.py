@@ -37,12 +37,44 @@ MODES = {
 
 NUM_FIELDS = ("energy", "protein", "fat", "carb", "sodium", "price")
 
+# 字段别名：MCP 原始字段、其他解析器、中文表头都要能吃。
+# 关键原因：早期版本只认 "carb"，遇到 MCP 的 "carbohydrate" 会静默填 0，
+# 于是「碳水 0 g」的餐品在约束里看起来永远合规——这类静默降级的错比崩溃更难发现。
+FIELD_ALIASES = {
+    "energy": ("energy", "energyKcal", "energy_kcal", "kcal", "calories", "热量"),
+    "protein": ("protein", "protein_g", "蛋白", "蛋白质"),
+    "fat": ("fat", "fat_g", "脂肪"),
+    "carb": ("carb", "carbohydrate", "carbohydrate_g", "carb_g", "碳水"),
+    "sodium": ("sodium", "sodium_mg", "钠"),
+    "price": ("price", "price_yuan", "价格", "实付"),
+}
+
+# kJ → kcal 兜底：只有 energyKcal 缺失时才回退到 energyKj
+KJ_TO_KCAL = 0.239
+
+MAX_ITEMS_HARD_CAP = 6      # 防组合爆炸：件数上限最多放宽到 6
+MAX_COMBINATIONS = 400_000  # 枚举组合数硬上限，超过就停（保护调用方不被卡死）
+
+
+def _pick_number(raw: Dict[str, Any], field: str) -> float:
+    """按别名依次取值，取不到则 0；负数一律归 0（负价格会骗过优化器）。"""
+    for key in FIELD_ALIASES.get(field, (field,)):
+        if key in raw:
+            try:
+                v = float(raw[key])
+            except (TypeError, ValueError):
+                continue
+            if v != v:  # NaN
+                continue
+            return v if v > 0 else 0.0
+    return 0.0
+
 
 def normalize_item(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """把任意来源的一条餐品记录规整成内部格式。缺字段按 0 处理。"""
     if not isinstance(raw, dict):
         return None
-    name = str(raw.get("name") or raw.get("mealName") or raw.get("title") or "").strip()
+    name = str(raw.get("name") or raw.get("mealName") or raw.get("productName") or raw.get("title") or "").strip()
     if not name:
         return None
     item = {
@@ -51,11 +83,16 @@ def normalize_item(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "category": str(raw.get("category") or raw.get("categoryName") or "其他").strip(),
     }
     for f in NUM_FIELDS:
-        v = raw.get(f, raw.get({"energy": "kcal"}.get(f, f), 0))
-        try:
-            item[f] = float(v)
-        except (TypeError, ValueError):
-            item[f] = 0.0
+        item[f] = _pick_number(raw, f)
+    # energyKcal 缺失时，用 energyKj 兜底换算（官方表两个字段都有，但脏数据可能只留一个）
+    if item["energy"] <= 0:
+        for k in ("energyKj", "energy_kj"):
+            if k in raw:
+                try:
+                    item["energy"] = max(0.0, float(raw[k]) * KJ_TO_KCAL)
+                except (TypeError, ValueError):
+                    pass
+                break
     return item
 
 
@@ -67,6 +104,13 @@ def build_pool(items: List[Dict[str, Any]], constraints: Dict[str, Any]) -> List
     """
     max_cal = float(constraints.get("max_calories") or 0) or float("inf")
     pool = [it for it in items if it["energy"] <= max_cal or max_cal == float("inf")]
+
+    # 价格未知（price=0）的商品在 cheap 模式下会被当成「免费」而永远胜出。
+    # 调用方明确 require_price 时，把它们剔掉，宁可少选也不能给出假的「最便宜」。
+    if constraints.get("require_price"):
+        pool = [it for it in pool if it["price"] > 0]
+        if not pool:
+            return []
 
     def density(it):
         return (it["protein"] * 10.0) / it["energy"] if it["energy"] > 0 else 0.0
@@ -146,16 +190,23 @@ def score(comb: List[Dict[str, Any]], c: Dict[str, Any], mode: str) -> float:
 
 
 def search(pool: List[Dict[str, Any]], constraints: Dict[str, Any], mode: str) -> List[Dict[str, Any]]:
-    max_items = int(constraints.get("max_items") or DEFAULT_MAX_ITEMS)
+    # 件数上限先过一道硬闸：max_items 给到 10 时 C(48,10) 是天文数字，必须拦住
+    max_items = min(int(constraints.get("max_items") or DEFAULT_MAX_ITEMS), MAX_ITEMS_HARD_CAP)
     max_cal = float(constraints.get("max_calories") or float("inf"))
     min_pro = float(constraints.get("min_protein") or 0)
 
     results: List[Dict[str, Any]] = []
     seen = set()
     n = len(pool)
+    enumerated = 0
 
     for size in range(1, max_items + 1):
         for comb in itertools.combinations(range(n), size):
+            enumerated += 1
+            if enumerated > MAX_COMBINATIONS:
+                # 兜底：组合数超上限就带着已有结果返回，而不是让调用方等到超时
+                results.sort(key=lambda r: (-r["score"], r["total"]["energy"]))
+                return dedupe_by_nutrition(results)[:TOP_N]
             # 剪枝：先累加热量，超了直接换
             cal = 0.0
             pro = 0.0
@@ -237,6 +288,22 @@ def render(plans: List[Dict[str, Any]], mode: str, c: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def render_json(plans: List[Dict[str, Any]], mode: str, c: Dict[str, Any]) -> str:
+    """结构化输出：给其他 Agent / 脚本对接用，与 render() 同源同结果。"""
+    return json.dumps({
+        "mode": mode,
+        "mode_desc": MODES.get(mode, ""),
+        "constraints": c,
+        "count": len(plans),
+        "plans": [{
+            "items": [{"code": it["code"], "name": it["name"], "category": it["category"],
+                       **{f: round(it[f], 2) for f in NUM_FIELDS}} for it in p["items"]],
+            "total": {f: round(p["total"][f], 2) for f in NUM_FIELDS},
+            "score": round(p["score"], 4),
+        } for p in plans],
+    }, ensure_ascii=False, indent=2)
+
+
 # --------------------------------------------------------------------------
 # 自测
 # --------------------------------------------------------------------------
@@ -313,6 +380,47 @@ def self_test() -> int:
             assert it["name"] != "零度可乐（中）", f"0 热量商品不应入选：{[i['name'] for i in p['items']]}"
     print(f"  通过：{len(plans5)} 个方案营养指纹互不相同，且无 0 热量凑数商品")
 
+    print("== 自测 6：MCP 原始字段名不能被静默填 0（carbohydrate / energyKcal / productName）==")
+    mcp_style = normalize_item({
+        "productName": "板烧鸡腿堡", "energyKcal": 404, "energyKj": 1690,
+        "protein": 27, "fat": 17, "carbohydrate": 37, "sodium": 980, "price": 21.0,
+    })
+    assert mcp_style is not None and mcp_style["name"] == "板烧鸡腿堡", mcp_style
+    assert mcp_style["energy"] == 404, f"energyKcal 未识别：{mcp_style}"
+    assert mcp_style["carb"] == 37, f"carbohydrate 未识别（静默 0 会让约束失真）：{mcp_style}"
+    assert mcp_style["sodium"] == 980, mcp_style
+    print(f"  通过：{mcp_style['name']} {mcp_style['energy']:.0f}kcal / 碳水 {mcp_style['carb']:.0f}g")
+
+    print("== 自测 7：kJ 兜底 + 负数不能骗过优化器 ==")
+    kj_item = normalize_item({"name": "只有kJ", "energyKj": 1000, "protein": 5})
+    assert 230 <= kj_item["energy"] <= 245, f"kJ→kcal 换算异常：{kj_item}"
+    neg = normalize_item({"name": "负价格", "energy": 100, "protein": 5, "price": -30})
+    assert neg["price"] == 0.0, f"负价格必须归 0，否则会永远被判为最便宜：{neg}"
+    print(f"  通过：1000kJ→{kj_item['energy']:.0f}kcal；负价格已归 0")
+
+    print("== 自测 8：价格未知的商品在 require_price 下必须出局 ==")
+    c8 = {"max_calories": 600, "min_protein": 10, "max_items": 2, "require_price": True}
+    mixed = [normalize_item(x) for x in SAMPLE_ITEMS]
+    for it in mixed:
+        it["price"] = 0.0            # 模拟价格链路没打通
+    mixed[0]["price"] = 21.0         # 只留一条有价格
+    pool8 = build_pool(mixed, c8)
+    assert all(it["price"] > 0 for it in pool8), "未知价格商品未被剔除"
+    plans8 = search(pool8, c8, "cheap")
+    assert plans8, "剔除后应有解"
+    assert all(it["price"] > 0 for p in plans8 for it in p["items"]), "方案里混入了未知价格商品"
+    print(f"  通过：候选池 {len(pool8)} 条均有价，方案价格 ¥{plans8[0]['total']['price']:.1f} 真实可信")
+
+    print("== 自测 9：max_items 给到荒谬值也不能把调用方卡死 ==")
+    import time as _time
+    c9 = {"max_calories": 900, "min_protein": 20, "max_items": 99}
+    pool9 = build_pool([normalize_item(x) for x in SAMPLE_ITEMS], c9)
+    t0 = _time.time()
+    search(pool9, c9, "balanced")
+    cost = _time.time() - t0
+    assert cost < 3.0, f"枚举耗时 {cost:.1f}s，件数硬闸未生效"
+    print(f"  通过：max_items=99 被压到 {MAX_ITEMS_HARD_CAP}，耗时 {cost:.2f}s")
+
     print("\n全部自测通过 ✅")
     return 0
 
@@ -323,6 +431,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="麦门卡路里精算师 · 配餐组合优化器")
     ap.add_argument("--input", help="JSON 文件路径；省略则从 stdin 读")
     ap.add_argument("--mode", default="cut", choices=sorted(MODES))
+    ap.add_argument("--json", action="store_true", help="输出 JSON（给其他 Agent/脚本对接）")
     ap.add_argument("--self-test", action="store_true", help="运行内置自测")
     ap.add_argument("--list-modes", action="store_true")
     args = ap.parse_args()
@@ -335,16 +444,20 @@ def main() -> int:
         return self_test()
 
     raw = open(args.input, encoding="utf-8").read() if args.input else sys.stdin.read()
-    payload = json.loads(raw)
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(f"输入不是合法 JSON：{e}", file=sys.stderr)
+        return 1
     items = [x for x in (normalize_item(i) for i in payload.get("items", [])) if x]
     if not items:
-        print("未读到有效餐品数据，请检查 items 字段。")
+        print("未读到有效餐品数据，请检查 items 字段。", file=sys.stderr)
         return 1
     constraints = payload.get("constraints", {})
     mode = payload.get("mode") or args.mode
     pool = build_pool(items, constraints)
     plans = search(pool, constraints, mode)
-    print(render(plans, mode, constraints))
+    print(render_json(plans, mode, constraints) if args.json else render(plans, mode, constraints))
     return 0
 
 
